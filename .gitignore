@@ -1,2 +1,9 @@
 **/*.pptx
 **/*.pptx#
+archive/
+test_images/
+.venv
+*.pdf
+*.zip
+TODO.md
+checkpoints/
