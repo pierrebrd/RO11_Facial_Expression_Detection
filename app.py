@@ -11,10 +11,7 @@ from model_architecture import MiniXception
 # -------------------------------------------------------------
 # 1. Définition des classes et correspondances d'émotions
 # -------------------------------------------------------------
-# Ordre alphabétique standard FER-2013 (utilisé par ImageFolder / Xception et LBP/KNN)
 EMOTIONS_ALPHA = ["Angry", "Disgust", "Fear", "Happy", "Neutral", "Sad", "Surprise"]
-
-# Mapping du modèle HOG+SVM (issu de hog_svm.ipynb)
 EMOTIONS_SVM = {
     0: "Angry",
     1: "Disgust",
@@ -44,7 +41,7 @@ print("Chargement de LBP + KNN...")
 bundle_knn = joblib.load("knn_lbp_fer2013.pkl")
 knn_model = bundle_knn["model"]
 
-# Détecteur de visages OpenCV (robuste : local d'abord, puis cv2.data)
+# Détecteur Haar Cascade (local en priorité)
 xml_name = "haarcascade_frontalface_default.xml"
 if os.path.exists(xml_name):
     face_cascade = cv2.CascadeClassifier(xml_name)
@@ -58,40 +55,55 @@ if face_cascade.empty():
 
 
 # -------------------------------------------------------------
-# 3. Pipeline d'inférence temps réel
+# 3. Pipeline d'inférence temps réel optimisé
 # -------------------------------------------------------------
 def process_frame(frame):
     """
-    Traite une image capturée par la webcam :
-    1. Détecte le visage
-    2. Redimensionne en 48x48 niveaux de gris
-    3. Exécute les 3 modèles en parallèle
-    4. Retourne la frame annotée et les prédictions
+    Traite une frame issue de la webcam :
+    - Détection tolérante et rapide
+    - Envoi aux 3 modèles
+    - Renvoi de l'image avec rectangle et des 3 classements
     """
     if frame is None or face_cascade.empty():
-        return frame, {}, {}, {}
+        msg = {"Aucun signal caméra": 1.0}
+        return frame, msg, msg, msg
 
-    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
+    # Réduction de la résolution pour fluidifier le traitement
+    h, w = frame.shape[:2]
+    if w > 640:
+        scale = 640.0 / w
+        proc_frame = cv2.resize(frame, (640, int(h * scale)))
+    else:
+        proc_frame = frame.copy()
+
+    gray = cv2.cvtColor(proc_frame, cv2.COLOR_RGB2GRAY)
+    # Détection plus sensible et tolérante (scaleFactor=1.1, minNeighbors=3)
+    faces = face_cascade.detectMultiScale(
+        gray,
+        scaleFactor=1.1,
+        minNeighbors=3,
+        minSize=(40, 40)
+    )
 
     if len(faces) == 0:
-        return frame, {}, {}, {}
+        waiting_msg = {"En attente de visage...": 1.0}
+        return proc_frame, waiting_msg, waiting_msg, waiting_msg
 
-    # Si plusieurs visages sont détectés, on prend le plus grand
+    # On sélectionne le plus grand visage
     faces = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)
-    x, y, w, h = faces[0]
-    face_roi = gray[y:y+h, x:x+w]
+    x, y, w_box, h_box = faces[0]
+    face_roi = gray[y:y+h_box, x:x+w_box]
     face_48 = cv2.resize(face_roi, (48, 48), interpolation=cv2.INTER_AREA)
 
-    # --- A. Inférence Mini-Xception (CNN) ---
-    face_norm = (face_48.astype(np.float32) / 127.5) - 1.0  # Normalisation [-1, 1]
+    # --- A. Mini-Xception (CNN) ---
+    face_norm = (face_48.astype(np.float32) / 127.5) - 1.0
     tensor = torch.tensor(face_norm, dtype=torch.float32).unsqueeze(0).unsqueeze(0)
     with torch.no_grad():
         logits = model_xc(tensor)
         probs_xc = F.softmax(logits, dim=1).squeeze().numpy()
     xc_scores = {EMOTIONS_ALPHA[i]: float(probs_xc[i]) for i in range(len(EMOTIONS_ALPHA))}
 
-    # --- B. Inférence HOG + SVM ---
+    # --- B. HOG + SVM ---
     hog_vec = hog(
         face_48,
         orientations=8,
@@ -105,40 +117,44 @@ def process_frame(frame):
     svm_probs = exp_scores / np.sum(exp_scores)
     svm_scores = {EMOTIONS_SVM[i]: float(svm_probs[i]) for i in range(7)}
 
-    # --- C. Inférence LBP + KNN ---
+    # --- C. LBP + KNN ---
     lbp = local_binary_pattern(face_48, P=8, R=1, method="default")
     hist, _ = np.histogram(lbp.ravel(), bins=256, range=(0, 256), density=True)
     knn_probs = knn_model.predict_proba([hist])[0]
     knn_scores = {EMOTIONS_ALPHA[i]: float(knn_probs[i]) for i in range(len(EMOTIONS_ALPHA))}
 
-    # Dessin de la boîte englobante sur la frame
-    annotated = frame.copy()
-    cv2.rectangle(annotated, (x, y), (x+w, y+h), (0, 255, 0), 2)
+    # Dessin du rectangle vert sur le visage détecté
+    annotated = proc_frame.copy()
+    cv2.rectangle(annotated, (x, y), (x+w_box, y+h_box), (0, 255, 0), 2)
 
     return annotated, xc_scores, svm_scores, knn_scores
 
 
 # -------------------------------------------------------------
-# 4. Interface Gradio
+# 4. Interface Gradio fluide
 # -------------------------------------------------------------
 with gr.Blocks(title="Benchmark Émotions en Direct") as demo:
     gr.Markdown("# Détection d'émotions en direct : Comparatif Side-by-Side")
     gr.Markdown("Comparaison en temps réel entre **Mini-Xception (CNN)**, **HOG + SVM** et **LBP + KNN** sur FER-2013.")
 
     with gr.Row():
-        webcam = gr.Image(sources=["webcam"], streaming=True, label="Flux Caméra")
-        with gr.Column():
-            out_xc = gr.Label(num_top_classes=3, label="1. Mini-Xception (Deep Learning)")
-            out_svm = gr.Label(num_top_classes=3, label="2. HOG + SVM Linéaire")
-            out_knn = gr.Label(num_top_classes=3, label="3. LBP + KNN")
+        with gr.Column(scale=1):
+            webcam = gr.Image(sources=["webcam"], streaming=True, label="1. Votre Webcam (Flux direct)")
+            annotated_output = gr.Image(label="2. Détection du visage en direct")
+        with gr.Column(scale=1):
+            out_xc = gr.Label(num_top_classes=3, label="Modèle 1 : Mini-Xception (CNN)")
+            out_svm = gr.Label(num_top_classes=3, label="Modèle 2 : HOG + SVM Linéaire")
+            out_knn = gr.Label(num_top_classes=3, label="Modèle 3 : LBP + KNN")
 
+    # stream_every=0.3 évite la saturation réseau et du CPU
+    # Séparation stricte : la webcam reste fluide à 30 FPS en local, annotated_output reçoit le retour serveur
     webcam.stream(
         fn=process_frame,
         inputs=[webcam],
-        outputs=[webcam, out_xc, out_svm, out_knn]
+        outputs=[annotated_output, out_xc, out_svm, out_knn],
+        stream_every=0.3
     )
 
 if __name__ == "__main__":
-    # Récupération du port dynamique Render (ou 7860 par défaut en local)
     port = int(os.environ.get("PORT", 7860))
     demo.launch(server_name="0.0.0.0", server_port=port)
