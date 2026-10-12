@@ -44,8 +44,17 @@ print("Chargement de LBP + KNN...")
 bundle_knn = joblib.load("knn_lbp_fer2013.pkl")
 knn_model = bundle_knn["model"]
 
-# Détecteur de visages OpenCV
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+# Détecteur de visages OpenCV (robuste : local d'abord, puis cv2.data)
+xml_name = "haarcascade_frontalface_default.xml"
+if os.path.exists(xml_name):
+    face_cascade = cv2.CascadeClassifier(xml_name)
+elif hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
+    face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + xml_name)
+else:
+    face_cascade = cv2.CascadeClassifier()
+
+if face_cascade.empty():
+    print("Avertissement: Impossible de charger le fichier XML Haar Cascade frontal.")
 
 
 # -------------------------------------------------------------
@@ -59,8 +68,8 @@ def process_frame(frame):
     3. Exécute les 3 modèles en parallèle
     4. Retourne la frame annotée et les prédictions
     """
-    if frame is None:
-        return None, {}, {}, {}
+    if frame is None or face_cascade.empty():
+        return frame, {}, {}, {}
 
     gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5)
