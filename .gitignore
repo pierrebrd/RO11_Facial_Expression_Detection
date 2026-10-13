@@ -7,3 +7,7 @@ test_images/
 *.zip
 TODO.md
 checkpoints/
+
+/streamlit_app/
+**/__pycache__/
+**/*.pyc
