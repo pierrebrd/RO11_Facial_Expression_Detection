@@ -17,8 +17,8 @@ for p in [str(CURRENT_DIR), str(ROOT_DIR)]:
         sys.path.insert(0, p)
 
 from models import load_all_models
-from pipeline import process_frame_benchmark, FrameAnalysisResult
-from ui import render_active_models
+from pipeline import process_frame_benchmark, FrameAnalysisResult, LatencyTracker
+from ui import render_active_models, render_latency_summary_table
 
 # Optional WebRTC support for live browser webcam streaming in cloud deployments
 try:
@@ -47,6 +47,7 @@ if HAS_WEBRTC:
             self.min_size = 40
             self.max_frame_width = 640
             self.latest_analysis = None
+            self.tracker = LatencyTracker()
             self.lock = threading.Lock()
 
         def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
@@ -68,6 +69,7 @@ if HAS_WEBRTC:
 
             with self.lock:
                 self.latest_analysis = analysis
+                self.tracker.update(analysis)
 
             # Return the annotated RGB frame to the WebRTC video stream
             return av.VideoFrame.from_ndarray(analysis.annotated_frame, format="rgb24")
@@ -79,6 +81,11 @@ def main():
         layout="wide",
         initial_sidebar_state="expanded"
     )
+
+    # Initialize session latency tracker for non-WebRTC modes
+    if "latency_tracker" not in st.session_state:
+        st.session_state.latency_tracker = LatencyTracker()
+    session_tracker = st.session_state.latency_tracker
 
     # -------------------------------------------------------------
     # Sidebar: Navigation (Tabs on the Left)
@@ -140,6 +147,10 @@ def main():
     )
 
     st.sidebar.markdown("---")
+    if st.sidebar.button("Reset Latency Means"):
+        session_tracker.reset()
+        st.rerun()
+
     with st.sidebar.expander("About the Models"):
         st.markdown(
             """
@@ -218,13 +229,16 @@ def main():
             else:
                 while ctx.state.playing:
                     analysis_snapshot = None
+                    tracker_snapshot = None
                     if ctx.video_processor:
                         with ctx.video_processor.lock:
                             analysis_snapshot = ctx.video_processor.latest_analysis
+                            tracker_snapshot = ctx.video_processor.tracker
 
                     with results_ph.container():
                         if analysis_snapshot is not None:
-                            render_active_models(analysis_snapshot, enabled_models)
+                            render_active_models(analysis_snapshot, enabled_models, tracker_snapshot)
+                            render_latency_summary_table(tracker_snapshot, enabled_models)
                         else:
                             st.info("Waiting for video frames...")
 
@@ -277,6 +291,8 @@ def main():
                                 max_frame_width=max_frame_width
                             )
 
+                            session_tracker.update(analysis)
+
                             video_ph.image(
                                 analysis.annotated_frame,
                                 caption="Live Camera Feed",
@@ -289,7 +305,8 @@ def main():
                                 roi_ph.info("No face detected")
 
                             with results_ph.container():
-                                render_active_models(analysis, enabled_models)
+                                render_active_models(analysis, enabled_models, session_tracker)
+                                render_latency_summary_table(session_tracker, enabled_models)
 
                             time.sleep(0.01)
                     finally:
@@ -324,6 +341,8 @@ def main():
                         max_frame_width=max_frame_width
                     )
 
+                    session_tracker.update(analysis)
+
                     v_col, roi_col = st.columns([3, 1])
                     with v_col:
                         st.image(
@@ -337,7 +356,8 @@ def main():
                         else:
                             st.warning("No face detected.")
 
-                    render_active_models(analysis, enabled_models)
+                    render_active_models(analysis, enabled_models, session_tracker)
+                    render_latency_summary_table(session_tracker, enabled_models)
 
     # -------------------------------------------------------------
     # Mode 3: Sample / Upload Image
@@ -395,6 +415,8 @@ def main():
                     max_frame_width=max_frame_width
                 )
 
+                session_tracker.update(analysis)
+
                 v_col, roi_col = st.columns([3, 1])
                 with v_col:
                     st.image(
@@ -408,7 +430,8 @@ def main():
                     else:
                         st.warning("No face detected.")
 
-                render_active_models(analysis, enabled_models)
+                render_active_models(analysis, enabled_models, session_tracker)
+                render_latency_summary_table(session_tracker, enabled_models)
 
 
 if __name__ == "__main__":

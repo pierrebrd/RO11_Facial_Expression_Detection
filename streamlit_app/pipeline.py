@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional, Tuple, List
 
 import cv2
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn.functional as F
 from skimage.feature import hog, local_binary_pattern
@@ -37,6 +38,80 @@ class FrameAnalysisResult:
     cnn: Optional[ModelResult] = None
     svm: Optional[ModelResult] = None
     knn: Optional[ModelResult] = None
+
+
+class LatencyTracker:
+    """
+    Accumulates latency measurements across frames to compute running means
+    for image processing, prediction/network latency, total latency, and FPS.
+    """
+    def __init__(self, max_history: int = 500):
+        self.max_history = max_history
+        self.reset()
+
+    def reset(self):
+        self.data = {
+            "cnn": {"img_proc": [], "network": [], "total": []},
+            "svm": {"img_proc": [], "network": [], "total": []},
+            "knn": {"img_proc": [], "network": [], "total": []},
+        }
+
+    def update(self, analysis: FrameAnalysisResult):
+        if not analysis.has_face:
+            return
+
+        for key, res in [("cnn", analysis.cnn), ("svm", analysis.svm), ("knn", analysis.knn)]:
+            if res is not None:
+                self.data[key]["img_proc"].append(res.image_proc_latency_ms)
+                self.data[key]["network"].append(res.network_latency_ms)
+                self.data[key]["total"].append(res.total_latency_ms)
+                if len(self.data[key]["total"]) > self.max_history:
+                    self.data[key]["img_proc"].pop(0)
+                    self.data[key]["network"].pop(0)
+                    self.data[key]["total"].pop(0)
+
+    def get_means(self, model_key: str) -> Dict[str, Optional[float]]:
+        totals = self.data[model_key]["total"]
+        if not totals:
+            return {"img_proc": None, "network": None, "total": None, "fps": None, "count": 0}
+        mean_tot = float(np.mean(totals))
+        return {
+            "img_proc": float(np.mean(self.data[model_key]["img_proc"])),
+            "network": float(np.mean(self.data[model_key]["network"])),
+            "total": mean_tot,
+            "fps": 1000.0 / mean_tot if mean_tot > 0 else 0.0,
+            "count": len(totals)
+        }
+
+    def get_summary_dataframe(self, enabled_models: List[str]) -> pd.DataFrame:
+        name_map = {
+            "cnn": "Mini-Xception (CNN)",
+            "svm": "HOG + Linear SVM",
+            "knn": "LBP + KNN",
+        }
+        rows = []
+        for key in ["cnn", "svm", "knn"]:
+            if key in enabled_models:
+                stats = self.get_means(key)
+                if stats["count"] > 0:
+                    rows.append({
+                        "Model": name_map[key],
+                        "Mean Image Proc (ms)": f"{stats['img_proc']:.1f}",
+                        "Mean Prediction (ms)": f"{stats['network']:.1f}",
+                        "Mean Total Latency (ms)": f"{stats['total']:.1f}",
+                        "Mean FPS": f"{stats['fps']:.1f}",
+                        "Frames Sampled": stats["count"]
+                    })
+                else:
+                    rows.append({
+                        "Model": name_map[key],
+                        "Mean Image Proc (ms)": "-",
+                        "Mean Prediction (ms)": "-",
+                        "Mean Total Latency (ms)": "-",
+                        "Mean FPS": "-",
+                        "Frames Sampled": 0
+                    })
+        return pd.DataFrame(rows)
 
 
 def run_cnn_inference(
@@ -209,7 +284,17 @@ def process_frame_benchmark(
     # Prepare RGB frame for Streamlit display
     annotated_rgb = cv2.cvtColor(proc_frame, cv2.COLOR_BGR2RGB)
 
-    # Show Haar Cascade timing at top-left of frame
+    # Show Haar Cascade timing at top-left of frame with dark outline for contrast
+    cv2.putText(
+        annotated_rgb,
+        f"Haar: {haar_only_ms:.1f}ms",
+        (10, 25),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (0, 0, 0),
+        3,
+        cv2.LINE_AA
+    )
     cv2.putText(
         annotated_rgb,
         f"Haar: {haar_only_ms:.1f}ms",
@@ -217,7 +302,7 @@ def process_frame_benchmark(
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
         (0, 255, 0),
-        2,
+        1,
         cv2.LINE_AA
     )
 
@@ -278,6 +363,7 @@ def process_frame_benchmark(
     for (ox, oy, ow, oh) in faces_sorted[1:]:
         cv2.rectangle(annotated_rgb, (ox, oy), (ox + ow, oy + oh), (0, 200, 255), 1)
 
+    # Multi-line display for each model result
     labels = []
     if cnn_res is not None:
         labels.append(f"CNN: {cnn_res.top_emotion} ({cnn_res.top_prob*100:.0f}%, {cnn_res.network_latency_ms:.0f}ms)")
@@ -286,18 +372,50 @@ def process_frame_benchmark(
     if knn_res is not None:
         labels.append(f"KNN: {knn_res.top_emotion} ({knn_res.top_prob*100:.0f}%, {knn_res.network_latency_ms:.0f}ms)")
 
-    label_text = " | ".join(labels) if labels else "Face detected"
-    text_y = max(y - 10, 20)
-    cv2.putText(
-        annotated_rgb,
-        label_text,
-        (x, text_y),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
-        (0, 255, 0),
-        2,
-        cv2.LINE_AA
-    )
+    num_lines = len(labels)
+    if num_lines > 0:
+        line_height = 20
+        # If enough space above the bounding box, stack upward; otherwise position below
+        if y >= num_lines * line_height + 5:
+            start_y = y - 8 - (num_lines - 1) * line_height
+        else:
+            start_y = y + h_box + 20
+
+        for i, line_text in enumerate(labels):
+            curr_y = start_y + i * line_height
+            # Shadow outline for readability on any background
+            cv2.putText(
+                annotated_rgb,
+                line_text,
+                (x, curr_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 0, 0),
+                3,
+                cv2.LINE_AA
+            )
+            # Crisp green foreground text
+            cv2.putText(
+                annotated_rgb,
+                line_text,
+                (x, curr_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (0, 255, 0),
+                1,
+                cv2.LINE_AA
+            )
+    else:
+        cv2.putText(
+            annotated_rgb,
+            "Face detected",
+            (x, max(y - 10, 20)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 0),
+            1,
+            cv2.LINE_AA
+        )
 
     return FrameAnalysisResult(
         has_face=True,
