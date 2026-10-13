@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import threading
 from pathlib import Path
 
 import cv2
@@ -18,6 +19,58 @@ for p in [str(CURRENT_DIR), str(ROOT_DIR)]:
 from models import load_all_models
 from pipeline import process_frame_benchmark, FrameAnalysisResult
 from ui import render_active_models
+
+# Optional WebRTC support for live browser webcam streaming in cloud deployments
+try:
+    import av
+    from streamlit_webrtc import (
+        webrtc_streamer,
+        WebRtcMode,
+        RTCConfiguration,
+        VideoProcessorBase
+    )
+    HAS_WEBRTC = True
+except ImportError:
+    HAS_WEBRTC = False
+
+
+if HAS_WEBRTC:
+    class EmotionVideoProcessor(VideoProcessorBase):
+        """
+        Processes live video frames from the browser via WebRTC in real time.
+        """
+        def __init__(self):
+            self.models = None
+            self.enabled_models = ["cnn", "svm", "knn"]
+            self.scale_factor = 1.10
+            self.min_neighbors = 3
+            self.min_size = 40
+            self.max_frame_width = 640
+            self.latest_analysis = None
+            self.lock = threading.Lock()
+
+        def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
+            img_bgr = frame.to_ndarray(format="bgr24")
+            if self.models is None:
+                return frame
+
+            analysis: FrameAnalysisResult = process_frame_benchmark(
+                frame=img_bgr,
+                models=self.models,
+                enable_cnn="cnn" in self.enabled_models,
+                enable_svm="svm" in self.enabled_models,
+                enable_knn="knn" in self.enabled_models,
+                scale_factor=self.scale_factor,
+                min_neighbors=self.min_neighbors,
+                min_size=self.min_size,
+                max_frame_width=self.max_frame_width
+            )
+
+            with self.lock:
+                self.latest_analysis = analysis
+
+            # Return the annotated RGB frame to the WebRTC video stream
+            return av.VideoFrame.from_ndarray(analysis.annotated_frame, format="rgb24")
 
 
 def main():
@@ -116,30 +169,80 @@ def main():
         st.stop()
 
     # -------------------------------------------------------------
-    # Mode 1: Live Webcam (OpenCV)
+    # Mode 1: Live Webcam
     # -------------------------------------------------------------
     if mode == "Live Webcam":
         st.subheader("Live Webcam")
 
-        c1, c2, c3 = st.columns([1, 1, 1])
-        cam_idx = c1.number_input("Camera Device Index", min_value=0, max_value=5, value=0, step=1, key="live_idx")
-        mirror_feed = c2.checkbox("Mirror Feed (Horizontal Flip)", value=True, key="live_mirror")
-        start_stream = c3.toggle("Start Live Stream", value=False, key="live_toggle")
+        if not enabled_models:
+            st.warning("Please enable at least one model in Model Selection on the left.")
+            return
 
-        v_col, roi_col = st.columns([3, 1])
-        video_ph = v_col.empty()
-        roi_ph = roi_col.empty()
-        results_ph = st.empty()
+        if HAS_WEBRTC:
+            st.caption(
+                "Streaming from your browser webcam via WebRTC. "
+                "Click **START** below to begin real-time detection and latency benchmarking."
+            )
 
-        if not start_stream:
-            video_ph.info("Toggle 'Start Live Stream' above to launch the webcam.")
+            rtc_config = RTCConfiguration(
+                {
+                    "iceServers": [
+                        {"urls": ["stun:stun.l.google.com:19302"]},
+                        {"urls": ["stun:stun1.l.google.com:19302"]},
+                    ]
+                }
+            )
+
+            ctx = webrtc_streamer(
+                key="live-webcam-webrtc",
+                mode=WebRtcMode.SENDRECV,
+                rtc_configuration=rtc_config,
+                video_processor_factory=EmotionVideoProcessor,
+                media_stream_constraints={"video": True, "audio": False},
+                async_processing=True,
+            )
+
+            if ctx.video_processor:
+                ctx.video_processor.models = models
+                ctx.video_processor.enabled_models = enabled_models
+                ctx.video_processor.scale_factor = scale_factor
+                ctx.video_processor.min_neighbors = min_neighbors
+                ctx.video_processor.min_size = min_size
+                ctx.video_processor.max_frame_width = max_frame_width
+
+                if ctx.state.playing and ctx.video_processor.latest_analysis is not None:
+                    st.markdown("---")
+                    with ctx.video_processor.lock:
+                        analysis_snapshot = ctx.video_processor.latest_analysis
+                    render_active_models(analysis_snapshot, enabled_models)
+
         else:
-            if not enabled_models:
-                st.warning("Please enable at least one model in Model Selection on the left.")
+            st.warning(
+                "When deployed on the internet, your web browser cannot access a server's local camera. "
+                "Browser streaming requires `streamlit-webrtc` (added to `requirements.txt`). "
+                "You can also use **Webcam Snapshot** on the left to capture frames directly."
+            )
+
+            st.markdown("#### Local OpenCV Camera (Localhost Only)")
+            c1, c2 = st.columns([1, 1])
+            cam_idx = c1.number_input("Camera Device Index", min_value=0, max_value=5, value=0, step=1, key="live_idx")
+            start_stream = c2.toggle("Start Live Stream", value=False, key="live_toggle")
+
+            v_col, roi_col = st.columns([3, 1])
+            video_ph = v_col.empty()
+            roi_ph = roi_col.empty()
+            results_ph = st.empty()
+
+            if not start_stream:
+                video_ph.info("Toggle 'Start Live Stream' above to launch local camera device.")
             else:
                 cap = cv2.VideoCapture(int(cam_idx))
                 if not cap.isOpened():
-                    st.error(f"Could not open camera device at index {cam_idx}.")
+                    st.error(
+                        f"Could not open camera device at index {cam_idx}. "
+                        "On cloud servers, no physical camera is attached. "
+                        "Please use 'Webcam Snapshot' on the left."
+                    )
                 else:
                     try:
                         while start_stream:
@@ -147,9 +250,6 @@ def main():
                             if not ret:
                                 video_ph.warning("Unable to read frame from webcam.")
                                 break
-
-                            if mirror_feed:
-                                frame = cv2.flip(frame, 1)
 
                             analysis: FrameAnalysisResult = process_frame_benchmark(
                                 frame=frame,
@@ -186,6 +286,7 @@ def main():
     # -------------------------------------------------------------
     elif mode == "Webcam Snapshot":
         st.subheader("Webcam Snapshot")
+        st.caption("Capture a photo directly from your browser webcam.")
 
         camera_image = st.camera_input("Take a photo")
 

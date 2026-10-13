@@ -209,6 +209,18 @@ def process_frame_benchmark(
     # Prepare RGB frame for Streamlit display
     annotated_rgb = cv2.cvtColor(proc_frame, cv2.COLOR_BGR2RGB)
 
+    # Show Haar Cascade timing at top-left of frame
+    cv2.putText(
+        annotated_rgb,
+        f"Haar: {haar_only_ms:.1f}ms",
+        (10, 25),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (0, 255, 0),
+        2,
+        cv2.LINE_AA
+    )
+
     if len(faces) == 0:
         return FrameAnalysisResult(
             has_face=False,
@@ -268,11 +280,11 @@ def process_frame_benchmark(
 
     labels = []
     if cnn_res is not None:
-        labels.append(f"CNN: {cnn_res.top_emotion}")
+        labels.append(f"CNN: {cnn_res.top_emotion} ({cnn_res.top_prob*100:.0f}%, {cnn_res.network_latency_ms:.0f}ms)")
     if svm_res is not None:
-        labels.append(f"SVM: {svm_res.top_emotion}")
+        labels.append(f"SVM: {svm_res.top_emotion} ({svm_res.top_prob*100:.0f}%, {svm_res.network_latency_ms:.0f}ms)")
     if knn_res is not None:
-        labels.append(f"KNN: {knn_res.top_emotion}")
+        labels.append(f"KNN: {knn_res.top_emotion} ({knn_res.top_prob*100:.0f}%, {knn_res.network_latency_ms:.0f}ms)")
 
     label_text = " | ".join(labels) if labels else "Face detected"
     text_y = max(y - 10, 20)
@@ -281,7 +293,7 @@ def process_frame_benchmark(
         label_text,
         (x, text_y),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.55,
+        0.5,
         (0, 255, 0),
         2,
         cv2.LINE_AA
