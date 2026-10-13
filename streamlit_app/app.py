@@ -210,11 +210,25 @@ def main():
                 ctx.video_processor.min_size = min_size
                 ctx.video_processor.max_frame_width = max_frame_width
 
-                if ctx.state.playing and ctx.video_processor.latest_analysis is not None:
-                    st.markdown("---")
-                    with ctx.video_processor.lock:
-                        analysis_snapshot = ctx.video_processor.latest_analysis
-                    render_active_models(analysis_snapshot, enabled_models)
+            st.markdown("---")
+            results_ph = st.empty()
+
+            if not ctx.state.playing:
+                results_ph.info("Click 'START' above to begin streaming and view emotion metrics.")
+            else:
+                while ctx.state.playing:
+                    analysis_snapshot = None
+                    if ctx.video_processor:
+                        with ctx.video_processor.lock:
+                            analysis_snapshot = ctx.video_processor.latest_analysis
+
+                    with results_ph.container():
+                        if analysis_snapshot is not None:
+                            render_active_models(analysis_snapshot, enabled_models)
+                        else:
+                            st.info("Waiting for video frames...")
+
+                    time.sleep(0.15)
 
         else:
             st.warning(
