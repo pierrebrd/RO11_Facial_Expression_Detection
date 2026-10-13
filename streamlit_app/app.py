@@ -296,7 +296,7 @@ def main():
                             video_ph.image(
                                 analysis.annotated_frame,
                                 caption="Live Camera Feed",
-                                use_container_width=True
+                                width='stretch',
                             )
 
                             if analysis.has_face and analysis.face_48 is not None:
@@ -348,7 +348,7 @@ def main():
                         st.image(
                             analysis.annotated_frame,
                             caption="Captured Frame with Detection",
-                            use_container_width=True
+                            width='stretch',
                         )
                     with roi_col:
                         if analysis.has_face and analysis.face_48 is not None:
@@ -422,7 +422,7 @@ def main():
                     st.image(
                         analysis.annotated_frame,
                         caption="Detection Result",
-                        use_container_width=True
+                        width='stretch',
                     )
                 with roi_col:
                     if analysis.has_face and analysis.face_48 is not None:

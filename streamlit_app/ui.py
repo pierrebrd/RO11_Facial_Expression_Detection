@@ -93,7 +93,7 @@ def render_model_card(
     )
 
     chart = (bars + text).properties(height=280)
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width='stretch',)
 
 
 def render_active_models(
@@ -137,4 +137,4 @@ def render_latency_summary_table(tracker: Optional[LatencyTracker], enabled_mode
     df = tracker.get_summary_dataframe(enabled_models)
     if not df.empty:
         st.markdown("#### Mean Latency Benchmark (Running Average)")
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width='stretch', hide_index=True)

@@ -6,6 +6,7 @@ from typing import Dict, Any, Tuple
 
 import cv2
 import joblib
+import pickle
 import streamlit as st
 import torch
 
@@ -93,11 +94,17 @@ def load_all_models() -> Dict[str, Any]:
     svm_classifiers = bundle_svm["classifiers"]
     svm_scaler = bundle_svm["scaler"]
 
-    # 3. LBP + KNN
-    knn_path = find_file("knn_lbp_fer2013.pkl")
-    bundle_knn = joblib.load(str(knn_path))
-    knn_model = bundle_knn["model"]
-    knn_classes = [c.capitalize() for c in bundle_knn.get("classes", EMOTIONS_ALPHA)]
+    # 3. LBP + KNN (trained model saved as knn_trained from lbp_knn.ipynb)
+    try:
+        knn_path = find_file("knn_trained")
+        with open(knn_path, "rb") as f:
+            knn_model = pickle.load(f)
+    except FileNotFoundError:
+        knn_path = find_file("knn_lbp_fer2013.pkl")
+        bundle_knn = joblib.load(str(knn_path))
+        knn_model = bundle_knn["model"] if isinstance(bundle_knn, dict) else bundle_knn
+
+    knn_classes = EMOTIONS_ALPHA
 
     # 4. Haar Cascade Face Detector
     try:

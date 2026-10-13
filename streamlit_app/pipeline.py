@@ -204,16 +204,18 @@ def run_knn_inference(
 ) -> ModelResult:
     """Runs LBP + KNN inference and records texture extraction and neighbor search latency."""
     t0_prep = time.perf_counter()
-    lbp = local_binary_pattern(face_48, P=8, R=1, method="default")
+    image = face_48.astype(np.float32) / 255.0
+    lbp = local_binary_pattern(image, P=8, R=1, method="default")
     hist, _ = np.histogram(lbp.ravel(), bins=256, range=(0, 256), density=True)
+    hist_input = hist.reshape(1, -1)
     prep_ms = (time.perf_counter() - t0_prep) * 1000.0
 
     t0_net = time.perf_counter()
-    knn_probs = knn_model.predict_proba([hist])[0]
+    knn_probs = knn_model.predict_proba(hist_input)[0]
+    top_idx = int(knn_model.predict(hist_input)[0])
     net_ms = (time.perf_counter() - t0_net) * 1000.0
 
     scores = {knn_classes[i]: float(knn_probs[i]) for i in range(len(knn_classes))}
-    top_idx = int(np.argmax(knn_probs))
     top_emotion = knn_classes[top_idx]
     top_prob = float(knn_probs[top_idx])
 
