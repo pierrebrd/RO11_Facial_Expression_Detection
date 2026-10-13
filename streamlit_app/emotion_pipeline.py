@@ -40,6 +40,7 @@ class FrameAnalysisResult:
     haar_latency_ms: float
     cnn: Optional[ModelResult] = None
     svm: Optional[ModelResult] = None
+    svm_rbf: Optional[ModelResult] = None
     knn: Optional[ModelResult] = None
 
 
@@ -56,6 +57,7 @@ class LatencyTracker:
         self.data = {
             "cnn": {"img_proc": [], "network": [], "total": []},
             "svm": {"img_proc": [], "network": [], "total": []},
+            "svm_rbf": {"img_proc": [], "network": [], "total": []},
             "knn": {"img_proc": [], "network": [], "total": []},
         }
 
@@ -63,7 +65,7 @@ class LatencyTracker:
         if not analysis.has_face:
             return
 
-        for key, res in [("cnn", analysis.cnn), ("svm", analysis.svm), ("knn", analysis.knn)]:
+        for key, res in [("cnn", analysis.cnn), ("svm", analysis.svm), ("svm_rbf", analysis.svm_rbf), ("knn", analysis.knn)]:
             if res is not None:
                 self.data[key]["img_proc"].append(res.image_proc_latency_ms)
                 self.data[key]["network"].append(res.network_latency_ms)
@@ -74,6 +76,8 @@ class LatencyTracker:
                     self.data[key]["total"].pop(0)
 
     def get_means(self, model_key: str) -> Dict[str, Optional[float]]:
+        if model_key not in self.data:
+            return {"img_proc": None, "network": None, "total": None, "fps": None, "count": 0}
         totals = self.data[model_key]["total"]
         if not totals:
             return {"img_proc": None, "network": None, "total": None, "fps": None, "count": 0}
@@ -90,10 +94,11 @@ class LatencyTracker:
         name_map = {
             "cnn": "Mini-Xception (CNN)",
             "svm": "HOG + Linear SVM",
+            "svm_rbf": "HOG + RBF SVM",
             "knn": "LBP + KNN",
         }
         rows = []
-        for key in ["cnn", "svm", "knn"]:
+        for key in ["cnn", "svm", "svm_rbf", "knn"]:
             if key in enabled_models:
                 stats = self.get_means(key)
                 if stats["count"] > 0:
@@ -158,21 +163,31 @@ def run_svm_inference(
     face_48: np.ndarray,
     svm_classifiers: Any,
     svm_scaler: Any,
-    haar_latency_ms: float
+    haar_latency_ms: float,
+    precomputed_hog_vec: Optional[np.ndarray] = None,
+    hog_time_ms: float = 0.0
 ) -> ModelResult:
     """Runs HOG + Linear SVM inference and records feature extraction and classifier latency."""
     t0_prep = time.perf_counter()
-    hog_vec = hog(
-        face_48,
-        orientations=9,
-        pixels_per_cell=(8, 8),
-        cells_per_block=(2, 2),
-        block_norm="L2",
-        transform_sqrt=True,
-        feature_vector=True
-    )
+    if precomputed_hog_vec is not None:
+        hog_vec = precomputed_hog_vec
+        base_prep_ms = hog_time_ms
+    else:
+        hog_vec = hog(
+            face_48,
+            orientations=9,
+            pixels_per_cell=(8, 8),
+            cells_per_block=(2, 2),
+            block_norm="L2",
+            transform_sqrt=True,
+            feature_vector=True
+        )
+        base_prep_ms = (time.perf_counter() - t0_prep) * 1000.0
+        t0_prep = time.perf_counter()
+
     hog_scaled = svm_scaler.transform([hog_vec])
-    prep_ms = (time.perf_counter() - t0_prep) * 1000.0
+    scale_ms = (time.perf_counter() - t0_prep) * 1000.0
+    prep_ms = base_prep_ms + scale_ms
 
     t0_net = time.perf_counter()
     raw_scores = [float(svm_classifiers[i].decision_function(hog_scaled)[0]) for i in range(7)]
@@ -187,6 +202,61 @@ def run_svm_inference(
 
     return ModelResult(
         name="HOG + Linear SVM",
+        top_emotion=top_emotion,
+        top_prob=top_prob,
+        emoji=EMOTION_EMOJIS.get(top_emotion, ""),
+        probabilities=scores,
+        haar_latency_ms=haar_latency_ms,
+        feature_prep_latency_ms=prep_ms,
+        image_proc_latency_ms=haar_latency_ms + prep_ms,
+        network_latency_ms=net_ms,
+        total_latency_ms=haar_latency_ms + prep_ms + net_ms
+    )
+
+
+def run_svm_rbf_inference(
+    face_48: np.ndarray,
+    svm_rbf_model: Any,
+    svm_rbf_scaler: Any,
+    haar_latency_ms: float,
+    precomputed_hog_vec: Optional[np.ndarray] = None,
+    hog_time_ms: float = 0.0
+) -> ModelResult:
+    """Runs HOG + RBF SVM inference and records feature extraction and classifier latency."""
+    t0_prep = time.perf_counter()
+    if precomputed_hog_vec is not None:
+        hog_vec = precomputed_hog_vec
+        base_prep_ms = hog_time_ms
+    else:
+        hog_vec = hog(
+            face_48,
+            orientations=9,
+            pixels_per_cell=(8, 8),
+            cells_per_block=(2, 2),
+            block_norm="L2",
+            transform_sqrt=True,
+            feature_vector=True
+        )
+        base_prep_ms = (time.perf_counter() - t0_prep) * 1000.0
+        t0_prep = time.perf_counter()
+
+    hog_scaled = svm_rbf_scaler.transform([hog_vec])
+    scale_ms = (time.perf_counter() - t0_prep) * 1000.0
+    prep_ms = base_prep_ms + scale_ms
+
+    t0_net = time.perf_counter()
+    decision_scores = svm_rbf_model.decision_function(hog_scaled).flatten()
+    exp_scores = np.exp(decision_scores - np.max(decision_scores))
+    svm_probs = exp_scores / np.sum(exp_scores)
+    net_ms = (time.perf_counter() - t0_net) * 1000.0
+
+    scores = {EMOTIONS_SVM[i]: float(svm_probs[i]) for i in range(7)}
+    top_idx = int(np.argmax(svm_probs))
+    top_emotion = EMOTIONS_SVM[top_idx]
+    top_prob = float(svm_probs[top_idx])
+
+    return ModelResult(
+        name="HOG + RBF SVM",
         top_emotion=top_emotion,
         top_prob=top_prob,
         emoji=EMOTION_EMOJIS.get(top_emotion, ""),
@@ -241,6 +311,7 @@ def process_frame_benchmark(
     models: Dict[str, Any],
     enable_cnn: bool = True,
     enable_svm: bool = True,
+    enable_svm_rbf: bool = False,
     enable_knn: bool = True,
     scale_factor: float = 1.1,
     min_neighbors: int = 3,
@@ -252,7 +323,7 @@ def process_frame_benchmark(
     1. Downscales frame if larger than max_frame_width
     2. Runs Haar Cascade face detection (timing measured)
     3. Crops and resizes primary face ROI to 48x48
-    4. Runs inference for enabled models (CNN, SVM, KNN)
+    4. Runs inference for enabled models (CNN, Linear SVM, RBF SVM, KNN)
     5. Returns annotated RGB frame and timing breakdowns
     """
     if frame is None:
@@ -344,13 +415,43 @@ def process_frame_benchmark(
             haar_latency_ms=haar_total_prep_ms
         )
 
+    # Compute shared HOG descriptor if either Linear SVM or RBF SVM is enabled
+    shared_hog_vec = None
+    hog_time_ms = 0.0
+    rbf_ready = enable_svm_rbf and models.get("svm_rbf_model") is not None
+    if enable_svm or rbf_ready:
+        t0_hog = time.perf_counter()
+        shared_hog_vec = hog(
+            face_48,
+            orientations=9,
+            pixels_per_cell=(8, 8),
+            cells_per_block=(2, 2),
+            block_norm="L2",
+            transform_sqrt=True,
+            feature_vector=True
+        )
+        hog_time_ms = (time.perf_counter() - t0_hog) * 1000.0
+
     svm_res = None
     if enable_svm:
         svm_res = run_svm_inference(
             face_48=face_48,
             svm_classifiers=models["svm_classifiers"],
             svm_scaler=models["svm_scaler"],
-            haar_latency_ms=haar_total_prep_ms
+            haar_latency_ms=haar_total_prep_ms,
+            precomputed_hog_vec=shared_hog_vec,
+            hog_time_ms=hog_time_ms
+        )
+
+    svm_rbf_res = None
+    if rbf_ready:
+        svm_rbf_res = run_svm_rbf_inference(
+            face_48=face_48,
+            svm_rbf_model=models["svm_rbf_model"],
+            svm_rbf_scaler=models.get("svm_rbf_scaler", models["svm_scaler"]),
+            haar_latency_ms=haar_total_prep_ms,
+            precomputed_hog_vec=shared_hog_vec,
+            hog_time_ms=hog_time_ms
         )
 
     knn_res = None
@@ -373,7 +474,9 @@ def process_frame_benchmark(
     if cnn_res is not None:
         labels.append(f"CNN: {cnn_res.top_emotion} ({cnn_res.top_prob*100:.0f}%, {cnn_res.network_latency_ms:.0f}ms)")
     if svm_res is not None:
-        labels.append(f"SVM: {svm_res.top_emotion} ({svm_res.top_prob*100:.0f}%, {svm_res.network_latency_ms:.0f}ms)")
+        labels.append(f"Linear SVM: {svm_res.top_emotion} ({svm_res.top_prob*100:.0f}%, {svm_res.network_latency_ms:.0f}ms)")
+    if svm_rbf_res is not None:
+        labels.append(f"RBF SVM: {svm_rbf_res.top_emotion} ({svm_rbf_res.top_prob*100:.0f}%, {svm_rbf_res.network_latency_ms:.0f}ms)")
     if knn_res is not None:
         labels.append(f"KNN: {knn_res.top_emotion} ({knn_res.top_prob*100:.0f}%, {knn_res.network_latency_ms:.0f}ms)")
 
@@ -431,5 +534,6 @@ def process_frame_benchmark(
         haar_latency_ms=haar_total_prep_ms,
         cnn=cnn_res,
         svm=svm_res,
+        svm_rbf=svm_rbf_res,
         knn=knn_res
     )

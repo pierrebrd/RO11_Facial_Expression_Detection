@@ -17,11 +17,11 @@ for p in [str(CURRENT_DIR), str(ROOT_DIR)]:
         sys.path.insert(0, p)
 
 try:
-    from streamlit_app.model_loader import load_all_models
+    from streamlit_app.model_loader import load_all_models, load_rbf_svm
     from streamlit_app.emotion_pipeline import process_frame_benchmark, FrameAnalysisResult, LatencyTracker
     from streamlit_app.ui_components import render_active_models, render_latency_summary_table
 except ImportError:
-    from model_loader import load_all_models
+    from model_loader import load_all_models, load_rbf_svm
     from emotion_pipeline import process_frame_benchmark, FrameAnalysisResult, LatencyTracker
     from ui_components import render_active_models, render_latency_summary_table
 
@@ -65,6 +65,7 @@ if HAS_WEBRTC:
                 models=self.models,
                 enable_cnn="cnn" in self.enabled_models,
                 enable_svm="svm" in self.enabled_models,
+                enable_svm_rbf="svm_rbf" in self.enabled_models,
                 enable_knn="knn" in self.enabled_models,
                 scale_factor=self.scale_factor,
                 min_neighbors=self.min_neighbors,
@@ -110,10 +111,21 @@ def main():
     st.sidebar.subheader("Model Selection")
     enable_cnn = st.sidebar.checkbox("Mini-Xception (CNN)", value=True, key="enable_cnn")
     enable_svm = st.sidebar.checkbox("HOG + Linear SVM", value=True, key="enable_svm")
+    enable_svm_rbf = st.sidebar.checkbox(
+        "HOG + RBF SVM",
+        value=False,
+        key="enable_svm_rbf",
+        help="Kernel SVM with RBF (~817 MB model file, higher latency). Disabled by default."
+    )
     enable_knn = st.sidebar.checkbox("LBP + KNN", value=True, key="enable_knn")
 
     enabled_models = [
-        k for k, v in [("cnn", enable_cnn), ("svm", enable_svm), ("knn", enable_knn)] if v
+        k for k, v in [
+            ("cnn", enable_cnn),
+            ("svm", enable_svm),
+            ("svm_rbf", enable_svm_rbf),
+            ("knn", enable_knn)
+        ] if v
     ]
 
     st.sidebar.markdown("---")
@@ -156,7 +168,17 @@ def main():
         session_tracker.reset()
         st.rerun()
 
-    # Load models
+    # -------------------------------------------------------------
+    # Main Header
+    # -------------------------------------------------------------
+    st.title("Facial Emotion Recognition: Benchmark")
+    st.markdown(
+        "Comparative benchmark between **Mini-Xception (CNN)**, "
+        "**HOG + Linear SVM**, optional **HOG + RBF SVM**, and **LBP + KNN** on FER-2013."
+    )
+    st.markdown("The training notebooks and the source code can be found in the Github repo :")
+
+    # Load base models
     try:
         models = load_all_models()
         print(f"[App] Active KNN model file: {models.get('knn_source', 'knn_trained')}", flush=True)
@@ -164,13 +186,32 @@ def main():
         st.error(f"Error loading models: {e}")
         st.stop()
 
+    # Lazily load RBF SVM only if enabled
+    if enable_svm_rbf:
+        try:
+            rbf_bundle = load_rbf_svm()
+            models["svm_rbf_model"] = rbf_bundle["model"]
+            models["svm_rbf_scaler"] = rbf_bundle["scaler"]
+        except Exception as e:
+            st.sidebar.error(f"Failed to load RBF SVM model: {e}")
+            models["svm_rbf_model"] = None
+            models["svm_rbf_scaler"] = None
+            enable_svm_rbf = False
+            if "svm_rbf" in enabled_models:
+                enabled_models.remove("svm_rbf")
+    else:
+        models["svm_rbf_model"] = None
+        models["svm_rbf_scaler"] = None
+
     with st.sidebar.expander("About the Models"):
         st.markdown(
             f"""
             - **Mini-Xception (CNN)**:
               Deep convolutional neural network with Depthwise Separable Convolutions and Residual Connections, trained directly on 48x48 FER-2013 images.
             - **HOG + Linear SVM**:
-              Histogram of Oriented Gradients (9 orientations, 8x8 cells, 2x2 blocks) scaled with StandardScaler and classified by 7 binary Linear SVMs (One-vs-Rest).
+              Histogram of Oriented Gradients (9 orientations, 8x8 cells, 2x2 blocks) scaled with StandardScaler and classified by 7 binary Linear SVMs (One-vs-Rest). Fast inference (~1-2 ms).
+            - **HOG + RBF SVM**:
+              Kernel SVM with Radial Basis Function (RBF) trained in One-vs-Rest configuration (`hog_svm_fer2013_rbf.pkl`, ~817 MB). Optional and slower inference (~200 ms).
             - **LBP + KNN**:
               Local Binary Patterns texture features (P=8, R=1, 256-bin normalized histogram) classified by K-Nearest Neighbors (Active file: `{models.get('knn_source', 'knn_trained')}`).
             """
@@ -281,6 +322,7 @@ def main():
                                 models=models,
                                 enable_cnn=enable_cnn,
                                 enable_svm=enable_svm,
+                                enable_svm_rbf=enable_svm_rbf,
                                 enable_knn=enable_knn,
                                 scale_factor=scale_factor,
                                 min_neighbors=min_neighbors,
@@ -331,6 +373,7 @@ def main():
                         models=models,
                         enable_cnn=enable_cnn,
                         enable_svm=enable_svm,
+                        enable_svm_rbf=enable_svm_rbf,
                         enable_knn=enable_knn,
                         scale_factor=scale_factor,
                         min_neighbors=min_neighbors,
@@ -405,6 +448,7 @@ def main():
                     models=models,
                     enable_cnn=enable_cnn,
                     enable_svm=enable_svm,
+                    enable_svm_rbf=enable_svm_rbf,
                     enable_knn=enable_knn,
                     scale_factor=scale_factor,
                     min_neighbors=min_neighbors,

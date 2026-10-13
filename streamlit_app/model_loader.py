@@ -127,9 +127,29 @@ def load_all_models() -> Dict[str, Any]:
         "model_xc": model_xc,
         "svm_classifiers": svm_classifiers,
         "svm_scaler": svm_scaler,
+        "svm_rbf_model": None,
+        "svm_rbf_scaler": None,
         "knn_model": knn_model,
         "knn_classes": knn_classes,
         "knn_source": knn_source_name,
         "face_cascade": face_cascade,
         "device": device
+    }
+
+
+@st.cache_resource(show_spinner="Loading HOG + RBF SVM model (~817 MB)...")
+def load_rbf_svm() -> Dict[str, Any]:
+    """
+    Loads and caches the HOG + RBF SVM model bundle from hog_svm_fer2013_rbf.pkl.
+    Loaded lazily on demand when enabled by the user to avoid overhead at startup.
+    """
+    rbf_path = find_file("hog_svm_fer2013_rbf.pkl")
+    print(f"[Model Loader] Loading RBF SVM model from: {rbf_path}...", flush=True)
+    bundle_rbf = joblib.load(str(rbf_path))
+    model_rbf = bundle_rbf["model"]
+    scaler_rbf = bundle_rbf["scaler"]
+    print(f"[Model Loader] RBF SVM model loaded: hog_svm_fer2013_rbf.pkl ({rbf_path})", flush=True)
+    return {
+        "model": model_rbf,
+        "scaler": scaler_rbf,
     }

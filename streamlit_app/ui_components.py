@@ -115,12 +115,13 @@ def render_active_models(
     model_registry = {
         "cnn": ("Mini-Xception (CNN)", analysis.cnn),
         "svm": ("HOG + Linear SVM", analysis.svm),
+        "svm_rbf": ("HOG + RBF SVM", analysis.svm_rbf),
         "knn": ("LBP + KNN", analysis.knn),
     }
 
     active_items = [
         (key, model_registry[key][0], model_registry[key][1])
-        for key in ["cnn", "svm", "knn"]
+        for key in ["cnn", "svm", "svm_rbf", "knn"]
         if key in enabled_models
     ]
 
