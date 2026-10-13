@@ -27,6 +27,17 @@ The database used is FER-2013, which contains 48x48 pixel grayscale images of fa
 
 ## KNN - Nathan Chandanson
 
+The full training and verification results are in the `lbp_knn.ipynb` file.
+
+We used Local Binary Pattern method to extract the important features of each 48\*48 grayscale photo. From the LBP image, we compute an histogram that should represent the features of our method: this histogram will be the input of our KNN.
+
+For the KNN model, we chose to take the n=5 nearest neighbours. We tried to change this value, but it did not significatively modify the results.
+
+The result are relatively bad, with an accuracy of 32.10% and a confusion matrix (shown below) showing significant errors when predicting on the test images of the dataset. This was confirmed with the real-time test of the prediction that showed that the model was not accurate.
+
+![alt text](docs/lbp_knn_cm.png)
+
+The benefit of this method is that it is quite fast to make a prediction, taking between around 10 and 15ms.
 
 ## CNN - Rémi Moshfeghi
 
