@@ -176,7 +176,7 @@ def main():
         "Comparative benchmark between **Mini-Xception (CNN)**, "
         "**HOG + Linear SVM**, optional **HOG + RBF SVM**, and **LBP + KNN** on FER-2013."
     )
-    st.markdown("The training notebooks and the source code can be found in the Github repo :")
+    st.markdown("The training notebooks and the source code can be found in the Github repo : [RO11_Facial_Expression_Detection](https://github.com/pierrebrd/RO11_Facial_Expression_Detection). The main branch contains the training code, the streamlit branch contains the code of this webapp")
 
     # Load base models
     try:
