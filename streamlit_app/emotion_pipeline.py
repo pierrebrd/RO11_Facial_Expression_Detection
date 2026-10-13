@@ -9,7 +9,10 @@ import torch
 import torch.nn.functional as F
 from skimage.feature import hog, local_binary_pattern
 
-from models import EMOTIONS_ALPHA, EMOTIONS_SVM, CANONICAL_EMOTIONS, EMOTION_EMOJIS
+try:
+    from streamlit_app.model_loader import EMOTIONS_ALPHA, EMOTIONS_SVM, CANONICAL_EMOTIONS, EMOTION_EMOJIS
+except ImportError:
+    from model_loader import EMOTIONS_ALPHA, EMOTIONS_SVM, CANONICAL_EMOTIONS, EMOTION_EMOJIS
 
 
 @dataclass

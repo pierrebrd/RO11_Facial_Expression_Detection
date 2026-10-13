@@ -3,8 +3,12 @@ import pandas as pd
 import altair as alt
 import streamlit as st
 
-from models import CANONICAL_EMOTIONS, EMOTION_EMOJIS
-from pipeline import ModelResult, FrameAnalysisResult, LatencyTracker
+try:
+    from streamlit_app.model_loader import CANONICAL_EMOTIONS, EMOTION_EMOJIS
+    from streamlit_app.emotion_pipeline import ModelResult, FrameAnalysisResult, LatencyTracker
+except ImportError:
+    from model_loader import CANONICAL_EMOTIONS, EMOTION_EMOJIS
+    from emotion_pipeline import ModelResult, FrameAnalysisResult, LatencyTracker
 
 
 def render_model_card(

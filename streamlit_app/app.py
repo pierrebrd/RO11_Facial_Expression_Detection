@@ -16,9 +16,14 @@ for p in [str(CURRENT_DIR), str(ROOT_DIR)]:
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from models import load_all_models
-from pipeline import process_frame_benchmark, FrameAnalysisResult, LatencyTracker
-from ui import render_active_models, render_latency_summary_table
+try:
+    from streamlit_app.model_loader import load_all_models
+    from streamlit_app.emotion_pipeline import process_frame_benchmark, FrameAnalysisResult, LatencyTracker
+    from streamlit_app.ui_components import render_active_models, render_latency_summary_table
+except ImportError:
+    from model_loader import load_all_models
+    from emotion_pipeline import process_frame_benchmark, FrameAnalysisResult, LatencyTracker
+    from ui_components import render_active_models, render_latency_summary_table
 
 # Optional WebRTC support for live browser webcam streaming in cloud deployments
 try:
