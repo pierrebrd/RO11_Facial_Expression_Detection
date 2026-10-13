@@ -156,33 +156,25 @@ def main():
         session_tracker.reset()
         st.rerun()
 
+    # Load models
+    try:
+        models = load_all_models()
+        print(f"[App] Active KNN model file: {models.get('knn_source', 'knn_trained')}", flush=True)
+    except Exception as e:
+        st.error(f"Error loading models: {e}")
+        st.stop()
+
     with st.sidebar.expander("About the Models"):
         st.markdown(
-            """
+            f"""
             - **Mini-Xception (CNN)**:
               Deep convolutional neural network with Depthwise Separable Convolutions and Residual Connections, trained directly on 48x48 FER-2013 images.
             - **HOG + Linear SVM**:
               Histogram of Oriented Gradients (9 orientations, 8x8 cells, 2x2 blocks) scaled with StandardScaler and classified by 7 binary Linear SVMs (One-vs-Rest).
             - **LBP + KNN**:
-              Local Binary Patterns texture features (P=8, R=1, 256-bin normalized histogram) classified by K-Nearest Neighbors.
+              Local Binary Patterns texture features (P=8, R=1, 256-bin normalized histogram) classified by K-Nearest Neighbors (Active file: `{models.get('knn_source', 'knn_trained')}`).
             """
         )
-
-    # -------------------------------------------------------------
-    # Main Header
-    # -------------------------------------------------------------
-    st.title("Facial Emotion Recognition: Benchmark")
-    st.markdown(
-        "Comparative benchmark between **Mini-Xception (CNN)**, "
-        "**HOG + Linear SVM**, and **LBP + KNN** on FER-2013."
-    )
-
-    # Load models
-    try:
-        models = load_all_models()
-    except Exception as e:
-        st.error(f"Error loading models: {e}")
-        st.stop()
 
     # -------------------------------------------------------------
     # Mode 1: Live Webcam

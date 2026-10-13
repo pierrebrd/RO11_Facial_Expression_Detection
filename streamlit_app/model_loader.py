@@ -99,10 +99,14 @@ def load_all_models() -> Dict[str, Any]:
         knn_path = find_file("knn_trained")
         with open(knn_path, "rb") as f:
             knn_model = pickle.load(f)
+        knn_source_name = "knn_trained"
+        print(f"[Model Loader] KNN model loaded: knn_trained ({knn_path})", flush=True)
     except FileNotFoundError:
         knn_path = find_file("knn_lbp_fer2013.pkl")
         bundle_knn = joblib.load(str(knn_path))
         knn_model = bundle_knn["model"] if isinstance(bundle_knn, dict) else bundle_knn
+        knn_source_name = "knn_lbp_fer2013.pkl"
+        print(f"[Model Loader] KNN model loaded: knn_lbp_fer2013.pkl ({knn_path})", flush=True)
 
     knn_classes = EMOTIONS_ALPHA
 
@@ -125,6 +129,7 @@ def load_all_models() -> Dict[str, Any]:
         "svm_scaler": svm_scaler,
         "knn_model": knn_model,
         "knn_classes": knn_classes,
+        "knn_source": knn_source_name,
         "face_cascade": face_cascade,
         "device": device
     }
